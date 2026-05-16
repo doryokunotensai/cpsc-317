@@ -34,10 +34,10 @@ public class DictionaryConnection {
     	    	    this.socket = new Socket(host, port);
     	    	    this.out = new PrintWriter(this.socket.getOutputStream(), true);
     	    	    this.in = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
-    	    } catch (IOException e) {
+    	    } catch (IOException | IllegalArgumentException e) {
     	    	    throw new DictConnectionException(e);
     	    }
-    	    
+
     	    Status status = Status.readStatus(in);
     	    if (status.getStatusCode() != 220) {
     	    	    throw new DictConnectionException("Expected 220, got " + status.getStatusCode());
@@ -115,17 +115,17 @@ public class DictionaryConnection {
         try {
         	out.println("SHOW DATABASES");
         	Status status = Status.readStatus(in);
-        	if (status.isNegativeReply()) return databaseMap;  
+        	if (status.isNegativeReply()) return databaseMap;
         	String line;
-  		while (!(line = in.readLine()).equals(".")) {
-  	  		String[] atoms = DictStringParser.splitAtoms(line);
-  	  		databaseMap.put(atoms[0], new Database(atoms[0], atoms[1]));
-  		}
-  		Status.readStatus(in); 
+		while (!(line = in.readLine()).equals(".")) {
+	  		String[] atoms = DictStringParser.splitAtoms(line);
+	  		databaseMap.put(atoms[0], new Database(atoms[0], atoms[1]));
+		}
+		Status.readStatus(in);
 
-  	} catch (IOException e) {
-  		throw new DictConnectionException(e);
-  	}
+	} catch (IOException e) {
+		throw new DictConnectionException(e);
+	}
         return databaseMap;
     }
 
@@ -148,10 +148,22 @@ public class DictionaryConnection {
      * @throws DictConnectionException If the connection was interrupted or the messages don't match their expected value.
      */
     public synchronized String getDatabaseInfo(Database d) throws DictConnectionException {
-	StringBuilder sb = new StringBuilder();
+    	    StringBuilder sb = new StringBuilder();
+    	    out.println("SHOW INFO " + d.getName());
+    	    Status status = Status.readStatus(in);
+    	    if (status.isNegativeReply()) return sb.toString();
 
-        // TODO Add your code here
+    	    try {
+    	    	    String line;
+    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    	    if (sb.length() > 0) sb.append("\n");
+    	    	    	    sb.append(line);
+    	    	    }
+    	    } catch (IOException e) {
+    	    	    throw new DictConnectionException(e);
+    	    }
 
-        return sb.toString();
+    	    Status.readStatus(in);
+    	    return sb.toString();
     }
 }
