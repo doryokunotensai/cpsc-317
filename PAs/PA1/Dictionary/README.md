@@ -20,7 +20,7 @@ Or open the project in IntelliJ and run `DictionaryMain.java`.
 
 ## Run Tests
 ```bash
-# all tests
+# all Tests
 ./gradlew test
 
 # single test class

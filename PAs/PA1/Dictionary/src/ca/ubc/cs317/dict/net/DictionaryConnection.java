@@ -12,7 +12,7 @@ import java.io.InputStreamReader;
 import java.util.*;
 
 /**
- * Created by Jonatan on 2017-09-09.
+ * Created by Dikpaal on 2026-05-16.
  */
 public class DictionaryConnection {
 	private static final int DEFAULT_PORT = 2628;
