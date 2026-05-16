@@ -80,11 +80,34 @@ public class DictionaryConnection {
      * @throws DictConnectionException If the connection was interrupted or the messages don't match their expected value.
      */
     public synchronized Collection<Definition> getDefinitions(String word, Database database) throws DictConnectionException {
-        Collection<Definition> set = new ArrayList<>();
+    	    Collection<Definition> set = new ArrayList<>();
 
-        // TODO Add your code here
+    	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
+    	    out.println("DEFINE " + database.getName() + " " + quotedWord);
+    	    Status status = Status.readStatus(in);
+    	    if (status.isNegativeReply()) return set;
 
-        return set;
+    	    int numDefs = Integer.parseInt(DictStringParser.splitAtoms(status.getDetails())[0]);
+
+    	    try {
+    	    	    for (int i = 0; i < numDefs; i++) {
+    	    	    	    // 151 "word" database "description"
+    	    	    	    Status defStatus = Status.readStatus(in);
+    	    	    	    String[] atoms = DictStringParser.splitAtoms(defStatus.getDetails());
+    	    	    	    Definition def = new Definition(atoms[0], atoms[1]);
+
+    	    	    	    String line;
+    	    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    	    	    def.appendDefinition(line);
+    	    	    	    }
+    	    	    	    set.add(def);
+    	    	    }
+    	    } catch (IOException e) {
+    	    	    throw new DictConnectionException(e);
+    	    }
+
+    	    Status.readStatus(in); // consume 250
+    	    return set;
     }
 
     /** Requests and retrieves a list of matches for a specific word pattern.
