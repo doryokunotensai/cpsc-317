@@ -135,11 +135,24 @@ public class DictionaryConnection {
      * @throws DictConnectionException If the connection was interrupted or the messages don't match their expected value.
      */
     public synchronized Set<MatchingStrategy> getStrategyList() throws DictConnectionException {
-        Set<MatchingStrategy> set = new LinkedHashSet<>();
+    	    Set<MatchingStrategy> set = new LinkedHashSet<>();
 
-        // TODO Add your code here
+    	    out.println("SHOW STRATEGIES");
+    	    Status status = Status.readStatus(in);
+    	    if (status.isNegativeReply()) return set;
 
-        return set;
+    	    try {
+    	    	    String line;
+    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    	    String[] atoms = DictStringParser.splitAtoms(line);
+    	    	    	    set.add(new MatchingStrategy(atoms[0], atoms[1]));
+    	    	    }
+    	    } catch (IOException e) {
+    	    	    throw new DictConnectionException(e);
+    	    }
+
+    	    Status.readStatus(in);
+    	    return set;
     }
 
     /** Requests and retrieves detailed information about the currently selected database.
