@@ -60,8 +60,13 @@ public class DictionaryConnection {
      *
      */
     public synchronized void close() {
-
-        // TODO Add your code here
+    	    try {
+    	    	    this.out.println("QUIT");
+    	    	    Status.readStatus(this.in);
+    	    	    this.socket.close();
+    	    } catch (Exception e) {
+    	    	    // ignore
+    	    }
     }
 
     /** Requests and retrieves all definitions for a specific word.
