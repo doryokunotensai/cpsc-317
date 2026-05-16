@@ -12,7 +12,9 @@ gradle wrapper
 
 ## Run GUI
 ```bash
-./gradlew run
+# from PAs/PA1/Dictionary/
+javac -d out -sourcepath src src/ca/ubc/cs317/dict/ui/DictionaryMain.java
+java -cp out ca.ubc.cs317.dict.ui.DictionaryMain
 ```
 Or open the project in IntelliJ and run `DictionaryMain.java`.
 

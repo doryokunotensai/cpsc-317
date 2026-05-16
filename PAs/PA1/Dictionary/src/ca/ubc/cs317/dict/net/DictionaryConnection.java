@@ -81,14 +81,12 @@ public class DictionaryConnection {
      */
     public synchronized Collection<Definition> getDefinitions(String word, Database database) throws DictConnectionException {
     	    Collection<Definition> set = new ArrayList<>();
-
     	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
     	    out.println("DEFINE " + database.getName() + " " + quotedWord);
     	    Status status = Status.readStatus(in);
     	    if (status.isNegativeReply()) return set;
 
     	    int numDefs = Integer.parseInt(DictStringParser.splitAtoms(status.getDetails())[0]);
-
     	    try {
     	    	    for (int i = 0; i < numDefs; i++) {
     	    	    	    // 151 "word" database "description"
@@ -122,7 +120,6 @@ public class DictionaryConnection {
      */
     public synchronized Set<String> getMatchList(String word, MatchingStrategy strategy, Database database) throws DictConnectionException {
     	    Set<String> set = new LinkedHashSet<>();
-
     	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
     	    out.println("MATCH " + database.getName() + " " + strategy.getName() + " " + quotedWord);
     	    Status status = Status.readStatus(in);
