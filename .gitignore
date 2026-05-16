@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Gradle
+.gradle/
+build/
+
+# Compiled output
+out/
+*.class
+
+# IntelliJ
+.idea/
+*.iml

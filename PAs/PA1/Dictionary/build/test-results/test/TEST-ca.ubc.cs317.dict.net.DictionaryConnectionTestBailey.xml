@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="ca.ubc.cs317.dict.net.DictionaryConnectionTestBailey" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-05-16T04:17:38" hostname="dikpaals-mb" time="0.014">
-  <properties/>
-  <testcase name="testGetDataBaseListBadServer()" classname="ca.ubc.cs317.dict.net.DictionaryConnectionTestBailey" time="0.014"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
