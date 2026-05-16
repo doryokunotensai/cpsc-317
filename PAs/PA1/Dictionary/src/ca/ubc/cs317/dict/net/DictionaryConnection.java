@@ -38,7 +38,7 @@ public class DictionaryConnection {
     	    	    throw new DictConnectionException(e);
     	    }
 
-    	    Status status = Status.readStatus(in);
+    	    Status status = Status.readStatus(this.in);
     	    if (status.getStatusCode() != 220) {
     	    	    throw new DictConnectionException("Expected 220, got " + status.getStatusCode());
     	    }
@@ -83,7 +83,7 @@ public class DictionaryConnection {
     	    Collection<Definition> set = new ArrayList<>();
     	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
     	    out.println("DEFINE " + database.getName() + " " + quotedWord);
-    	    Status status = Status.readStatus(in);
+    	    Status status = Status.readStatus(this.in);
     	    if (status.isNegativeReply()) return set;
 
     	    int numDefs = Integer.parseInt(DictStringParser.splitAtoms(status.getDetails())[0]);
@@ -95,7 +95,7 @@ public class DictionaryConnection {
     	    	    	    Definition def = new Definition(atoms[0], atoms[1]);
 
     	    	    	    String line;
-    	    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    	    while (!(line = this.in.readLine()).equals(".")) {
     	    	    	    	    def.appendDefinition(line);
     	    	    	    }
     	    	    	    set.add(def);
@@ -104,7 +104,7 @@ public class DictionaryConnection {
     	    	    throw new DictConnectionException(e);
     	    }
 
-    	    Status.readStatus(in); // consume 250
+    	    Status.readStatus(this.in); // consume 250
     	    return set;
     }
 
@@ -122,7 +122,7 @@ public class DictionaryConnection {
     	    Set<String> set = new LinkedHashSet<>();
     	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
     	    out.println("MATCH " + database.getName() + " " + strategy.getName() + " " + quotedWord);
-    	    Status status = Status.readStatus(in);
+    	    Status status = Status.readStatus(this.in);
     	    if (status.isNegativeReply()) return set;
 
     	    try {
@@ -135,7 +135,7 @@ public class DictionaryConnection {
     	    	    throw new DictConnectionException(e);
     	    }
 
-    	    Status.readStatus(in); // consume 250
+    	    Status.readStatus(this.in); // consume 250
     	    return set;
     }
 
@@ -148,10 +148,10 @@ public class DictionaryConnection {
         Map<String, Database> databaseMap = new HashMap<>();
         try {
         	out.println("SHOW DATABASES");
-        	Status status = Status.readStatus(in);
+        	Status status = Status.readStatus(this.in);
         	if (status.isNegativeReply()) return databaseMap;
         	String line;
-		while (!(line = in.readLine()).equals(".")) {
+        	while (!(line = this.in.readLine()).equals(".")) {
 	  		String[] atoms = DictStringParser.splitAtoms(line);
 	  		databaseMap.put(atoms[0], new Database(atoms[0], atoms[1]));
 		}
@@ -170,14 +170,13 @@ public class DictionaryConnection {
      */
     public synchronized Set<MatchingStrategy> getStrategyList() throws DictConnectionException {
     	    Set<MatchingStrategy> set = new LinkedHashSet<>();
-
     	    out.println("SHOW STRATEGIES");
-    	    Status status = Status.readStatus(in);
+    	    Status status = Status.readStatus(this.in);
     	    if (status.isNegativeReply()) return set;
 
     	    try {
     	    	    String line;
-    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    while (!(line = this.in.readLine()).equals(".")) {
     	    	    	    String[] atoms = DictStringParser.splitAtoms(line);
     	    	    	    set.add(new MatchingStrategy(atoms[0], atoms[1]));
     	    	    }
@@ -185,7 +184,7 @@ public class DictionaryConnection {
     	    	    throw new DictConnectionException(e);
     	    }
 
-    	    Status.readStatus(in);
+    	    Status.readStatus(this.in);
     	    return set;
     }
 
@@ -197,12 +196,11 @@ public class DictionaryConnection {
     public synchronized String getDatabaseInfo(Database d) throws DictConnectionException {
     	    StringBuilder sb = new StringBuilder();
     	    out.println("SHOW INFO " + d.getName());
-    	    Status status = Status.readStatus(in);
+    	    Status status = Status.readStatus(this.in);
     	    if (status.isNegativeReply()) return sb.toString();
-
     	    try {
     	    	    String line;
-    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    while (!(line = this.in.readLine()).equals(".")) {
     	    	    	    if (sb.length() > 0) sb.append("\n");
     	    	    	    sb.append(line);
     	    	    }
@@ -210,7 +208,7 @@ public class DictionaryConnection {
     	    	    throw new DictConnectionException(e);
     	    }
 
-    	    Status.readStatus(in);
+    	    Status.readStatus(this.in);
     	    return sb.toString();
     }
 }
