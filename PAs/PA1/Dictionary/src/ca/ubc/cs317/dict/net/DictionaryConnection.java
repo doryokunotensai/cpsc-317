@@ -7,14 +7,18 @@ import ca.ubc.cs317.dict.model.MatchingStrategy;
 import java.io.BufferedReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.*;
 
 /**
  * Created by Jonatan on 2017-09-09.
  */
 public class DictionaryConnection {
-
-    private static final int DEFAULT_PORT = 2628;
+	private static final int DEFAULT_PORT = 2628;
+	private Socket socket;
+	private BufferedReader in;
+	private PrintWriter out;
 
     /** Establishes a new connection with a DICT server using an explicit host and port number, and handles initial
      * welcome messages.
@@ -25,8 +29,19 @@ public class DictionaryConnection {
      * don't match their expected value.
      */
     public DictionaryConnection(String host, int port) throws DictConnectionException {
-        // TODO Replace this with code that creates the requested connection
-        throw new DictConnectionException("Not implemented");
+    	    // makes the connection
+    	    try {
+    	    	    this.socket = new Socket(host, port);
+    	    	    this.out = new PrintWriter(this.socket.getOutputStream(), true);
+    	    	    this.in = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
+    	    } catch (IOException e) {
+    	    	    throw new DictConnectionException(e);
+    	    }
+    	    
+    	    Status status = Status.readStatus(in);
+    	    if (status.getStatusCode() != 220) {
+    	    	    throw new DictConnectionException("Expected 220, got " + status.getStatusCode());
+    	    }
     }
 
     /** Establishes a new connection with a DICT server using an explicit host, with the default DICT port number, and
