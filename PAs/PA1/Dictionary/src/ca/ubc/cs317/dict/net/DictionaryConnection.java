@@ -112,9 +112,20 @@ public class DictionaryConnection {
      */
     public synchronized Map<String, Database> getDatabaseList() throws DictConnectionException {
         Map<String, Database> databaseMap = new HashMap<>();
+        try {
+        	out.println("SHOW DATABASES");
+        	Status status = Status.readStatus(in);
+        	if (status.isNegativeReply()) return databaseMap;  
+        	String line;
+  		while (!(line = in.readLine()).equals(".")) {
+  	  		String[] atoms = DictStringParser.splitAtoms(line);
+  	  		databaseMap.put(atoms[0], new Database(atoms[0], atoms[1]));
+  		}
+  		Status.readStatus(in); 
 
-        // TODO Add your code here
-
+  	} catch (IOException e) {
+  		throw new DictConnectionException(e);
+  	}
         return databaseMap;
     }
 
