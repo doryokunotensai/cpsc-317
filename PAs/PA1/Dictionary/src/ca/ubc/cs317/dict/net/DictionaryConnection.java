@@ -98,11 +98,25 @@ public class DictionaryConnection {
      * @throws DictConnectionException If the connection was interrupted or the messages don't match their expected value.
      */
     public synchronized Set<String> getMatchList(String word, MatchingStrategy strategy, Database database) throws DictConnectionException {
-        Set<String> set = new LinkedHashSet<>();
+    	    Set<String> set = new LinkedHashSet<>();
 
-        // TODO Add your code here
+    	    String quotedWord = word.contains(" ") ? "\"" + word + "\"" : word;
+    	    out.println("MATCH " + database.getName() + " " + strategy.getName() + " " + quotedWord);
+    	    Status status = Status.readStatus(in);
+    	    if (status.isNegativeReply()) return set;
 
-        return set;
+    	    try {
+    	    	    String line;
+    	    	    while (!(line = in.readLine()).equals(".")) {
+    	    	    	    String[] atoms = DictStringParser.splitAtoms(line);
+    	    	    	    set.add(atoms[1]);
+    	    	    }
+    	    } catch (IOException e) {
+    	    	    throw new DictConnectionException(e);
+    	    }
+
+    	    Status.readStatus(in); // consume 250
+    	    return set;
     }
 
     /** Requests and retrieves a map of database name to an equivalent database object for all valid databases used in the server.
