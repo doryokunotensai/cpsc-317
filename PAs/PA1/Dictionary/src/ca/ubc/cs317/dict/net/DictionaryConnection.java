@@ -85,7 +85,7 @@ public class DictionaryConnection {
     	    out.println("DEFINE " + database.getName() + " " + quotedWord);
     	    Status status = Status.readStatus(this.in);
     	    if (status.isNegativeReply()) return set;
-
+connection
     	    int numDefs = Integer.parseInt(DictStringParser.splitAtoms(status.getDetails())[0]);
     	    try {
     	    	    for (int i = 0; i < numDefs; i++) {
