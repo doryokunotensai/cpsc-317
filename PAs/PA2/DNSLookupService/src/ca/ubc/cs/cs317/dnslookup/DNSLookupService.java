@@ -119,7 +119,7 @@ public class DNSLookupService {
 				while (true) {
 					socket.receive(recvPacket);
 					DNSMessage response = new DNSMessage(recvBuf, recvPacket.getLength());
-					if (response.getID() != transactionID) continue;
+					if (response.getID() != transactionID || !response.getQR()) continue;
 
 					try {
 						return processResponse(response);
