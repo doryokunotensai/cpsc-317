@@ -47,9 +47,6 @@ typedef struct {
     pktlist *unacked;          /* sent but not yet acked packets */
 } stcp_send_ctrl_blk;
 
-/* ------------------------------------------------------------------ */
-/* Low-level send/recv helpers                                          */
-/* ------------------------------------------------------------------ */
 
 static void sendPacket(stcp_send_ctrl_blk *cb, packet *pkt) {
     htonHdr(pkt->hdr);
@@ -74,7 +71,6 @@ static int recvPacket(stcp_send_ctrl_blk *cb, packet *pkt, int timeoutMs) {
     if (n <= 0) return n;
     pkt->len = n;
     pkt->hdr = (tcpheader *)pkt->data;
-    /* checksum must be verified while header is still in network byte order */
     if (!checksumOk(pkt)) {
         logLog("error", "bad checksum, dropping");
         return STCP_READ_TIMED_OUT;
@@ -278,7 +274,6 @@ int main(int argc, char **argv) {
         argc--;
     }
 
-    // Extract the arguments
     destinationHost = argc > 1 ? argv[1] : "localhost";
     receiversPort = argc > 2 ? atoi(argv[2]) : getDefaultPort();
     sendersPort = argc > 3 ? atoi(argv[3]) : getDefaultPort() + 1;
