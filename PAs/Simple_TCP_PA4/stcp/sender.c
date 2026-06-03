@@ -33,6 +33,7 @@
 
 #define STCP_SUCCESS 1
 #define STCP_ERROR -1
+#define FAST_RETRANSMIT_THRESHOLD 3
 
 typedef struct {
     int fd;
@@ -47,6 +48,9 @@ typedef struct {
     pktlist *unacked;          /* sent but not yet acked packets */
     long oldestSendTime;       /* when oldest unacked packet was (last) sent */
     int retransmitTimeout;     /* current timeout for oldest unacked */
+
+    unsigned int lastAckNo;    /* ackNo of last received ACK (for dup detection) */
+    int dupAckCount;           /* consecutive duplicate ACK count */
 } stcp_send_ctrl_blk;
 
 
@@ -90,7 +94,7 @@ static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
     while (cb->unacked != NULL) {
         pktlist *oldest = cb->unacked;
         unsigned int endSeq = plus32(oldest->seqNo, (unsigned)payloadSize(&oldest->packet));
-        if (greater32(endSeq, ackNo)) break;   /* packet not fully acked yet */
+        if (greater32(endSeq, ackNo)) break;
         cb->unacked = oldest->next;
         oldest->next = NULL;
         freePacket(oldest);
@@ -100,25 +104,95 @@ static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
     cb->sendBase = ackNo;
 
     if (advanced && cb->unacked != NULL) {
-        /* new oldest — reset its timer */
         cb->oldestSendTime    = now();
         cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
     }
 }
 
-/* Drain all queued ACKs without blocking. Returns STCP_ERROR on RST/failure. */
+/*
+ * Track duplicate ACKs. Returns the current consecutive dup ACK count.
+ * Resets count when ackNo advances, increments when same ackNo seen again.
+ */
+static int updateDupAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
+    if (ackNo == cb->lastAckNo) {
+        cb->dupAckCount++;
+    } else if (greater32(ackNo, cb->lastAckNo)) {
+        cb->dupAckCount = 0;
+        cb->lastAckNo   = ackNo;
+    }
+    /* stale ACK (ackNo < lastAckNo): leave counts unchanged */
+    return cb->dupAckCount;
+}
+
+/*
+ * Drain all buffered ACKs without blocking.
+ * Updates dup ACK count and sendBase. Does NOT trigger fast retransmit.
+ * Returns STCP_ERROR on RST or permanent failure.
+ */
 static int drainAcks(stcp_send_ctrl_blk *cb) {
     packet resp;
     while (1) {
         int n = recvPacket(cb, &resp, 0);
-        if (n == STCP_READ_TIMED_OUT) return STCP_SUCCESS;
+        if (n == STCP_READ_TIMED_OUT)       return STCP_SUCCESS;
         if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
-        if (getRst(resp.hdr)) return STCP_ERROR;
+        if (getRst(resp.hdr))               return STCP_ERROR;
         if (getAck(resp.hdr)) {
             cb->recvWindow = resp.hdr->windowSize;
+            updateDupAck(cb, resp.hdr->ackNo);
             processAck(cb, resp.hdr->ackNo);
         }
     }
+}
+
+/*
+ * Fast retransmit: drain buffered ACKs, resend oldest unacked packet,
+ * then wait (blocking) until an ACK advances past sendBase.
+ * Duplicate ACKs at the same ackNo are ignored (no new fast retransmit triggered).
+ * Timeout doubles like a normal timeout, starting at 2s.
+ */
+static int fastRetransmit(stcp_send_ctrl_blk *cb) {
+    if (cb->unacked == NULL) return STCP_SUCCESS;
+
+    logLog("segment", "fast retransmit at seqNo %u", cb->unacked->seqNo);
+
+    if (drainAcks(cb) == STCP_ERROR) return STCP_ERROR;
+
+    sendPacket(cb, &cb->unacked->packet);
+    /* treated as if a timeout occurred → next timeout is 2s */
+    cb->retransmitTimeout = stcpNextTimeout(STCP_INITIAL_TIMEOUT);
+    cb->oldestSendTime    = now();
+    cb->dupAckCount       = 0;
+
+    unsigned int stalledAt = cb->sendBase;   /* the seqNo we're waiting to get past */
+
+    while (cb->unacked != NULL) {
+        long elapsed = now() - cb->oldestSendTime;
+        int timeLeft = max(0, cb->retransmitTimeout - (int)elapsed);
+
+        packet resp;
+        int n = recvPacket(cb, &resp, timeLeft);
+        if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
+        if (n == STCP_READ_TIMED_OUT) {
+            sendPacket(cb, &cb->unacked->packet);
+            cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
+            cb->oldestSendTime    = now();
+            continue;
+        }
+        if (getRst(resp.hdr)) return STCP_ERROR;
+        if (!getAck(resp.hdr)) continue;
+
+        unsigned int ackNo = resp.hdr->ackNo;
+
+        /* ignore ACKs that don't advance past the stalled point */
+        if (!greater32(ackNo, stalledAt)) continue;
+
+        cb->recvWindow  = resp.hdr->windowSize;
+        cb->lastAckNo   = ackNo;
+        cb->dupAckCount = 0;
+        processAck(cb, ackNo);
+        break;
+    }
+    return STCP_SUCCESS;
 }
 
 /*
@@ -142,6 +216,11 @@ int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
     while (offset < length) {
         /* Process any already-arrived ACKs without blocking */
         if (drainAcks(cb) == STCP_ERROR) return STCP_ERROR;
+
+        if (cb->dupAckCount >= FAST_RETRANSMIT_THRESHOLD && cb->unacked != NULL) {
+            if (fastRetransmit(cb) == STCP_ERROR) return STCP_ERROR;
+            continue;
+        }
 
         /* Retransmit oldest if it has timed out */
         if (cb->unacked != NULL) {
@@ -188,7 +267,11 @@ int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
                 if (getRst(resp.hdr)) return STCP_ERROR;
                 if (getAck(resp.hdr)) {
                     cb->recvWindow = resp.hdr->windowSize;
+                    int dups = updateDupAck(cb, resp.hdr->ackNo);
                     processAck(cb, resp.hdr->ackNo);
+                    if (dups >= FAST_RETRANSMIT_THRESHOLD && cb->unacked != NULL) {
+                        if (fastRetransmit(cb) == STCP_ERROR) return STCP_ERROR;
+                    }
                 }
             }
         }
@@ -227,6 +310,7 @@ stcp_send_ctrl_blk *stcp_open(char *destination, int sendersPort, int receiversP
     unsigned int isn  = (unsigned int)rand();
     cb->nextSeqNo = plus32(isn, 1);
     cb->sendBase  = plus32(isn, 1);
+    cb->lastAckNo = plus32(isn, 1);
 
     packet syn;
     createSegment(&syn, SYN, 0, isn, 0, NULL, 0);
@@ -266,6 +350,11 @@ int stcp_close(stcp_send_ctrl_blk *cb) {
 
     /* Drain any unacked data before sending FIN */
     while (cb->unacked != NULL) {
+        if (cb->dupAckCount >= FAST_RETRANSMIT_THRESHOLD) {
+            if (fastRetransmit(cb) == STCP_ERROR) goto cleanup;
+            continue;
+        }
+
         long elapsed = now() - cb->oldestSendTime;
         int timeLeft = max(0, cb->retransmitTimeout - (int)elapsed);
 
@@ -280,6 +369,7 @@ int stcp_close(stcp_send_ctrl_blk *cb) {
             if (getRst(resp.hdr)) goto cleanup;
             if (getAck(resp.hdr)) {
                 cb->recvWindow = resp.hdr->windowSize;
+                updateDupAck(cb, resp.hdr->ackNo);
                 processAck(cb, resp.hdr->ackNo);
             }
         }
