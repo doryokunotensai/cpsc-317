@@ -18,10 +18,6 @@
 // Implemented by Dikpaal Patel 37647864 in May/June 2026
 
 
-
-
-
-
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -86,9 +82,9 @@ static int recvPacket(stcp_send_ctrl_blk *cb, packet *pkt, int timeoutMs) {
     return n;
 }
 
-/* Free all unacked entries whose last byte falls before ackNo, advance sendBase */
+/* Free all unacked entries whose last byte falls at or before ackNo, advance sendBase */
 static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
-    if (!greater32(ackNo, cb->sendBase) && ackNo != cb->sendBase) return;
+    if (!greater32(ackNo, cb->sendBase)) return;
 
     int advanced = 0;
     while (cb->unacked != NULL) {
@@ -101,12 +97,27 @@ static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
         advanced = 1;
     }
 
-    if (greater32(ackNo, cb->sendBase)) cb->sendBase = ackNo;
+    cb->sendBase = ackNo;
 
     if (advanced && cb->unacked != NULL) {
         /* new oldest — reset its timer */
         cb->oldestSendTime    = now();
         cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
+    }
+}
+
+/* Drain all queued ACKs without blocking. Returns STCP_ERROR on RST/failure. */
+static int drainAcks(stcp_send_ctrl_blk *cb) {
+    packet resp;
+    while (1) {
+        int n = recvPacket(cb, &resp, 0);
+        if (n == STCP_READ_TIMED_OUT) return STCP_SUCCESS;
+        if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
+        if (getRst(resp.hdr)) return STCP_ERROR;
+        if (getAck(resp.hdr)) {
+            cb->recvWindow = resp.hdr->windowSize;
+            processAck(cb, resp.hdr->ackNo);
+        }
     }
 }
 
@@ -128,14 +139,24 @@ static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
 int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
     int offset = 0;
 
-    while (offset < length || cb->unacked != NULL) {
+    while (offset < length) {
+        /* Process any already-arrived ACKs without blocking */
+        if (drainAcks(cb) == STCP_ERROR) return STCP_ERROR;
 
-        /* Fill window with new packets */
-        while (offset < length) {
-            unsigned int inFlight  = minus32(cb->nextSeqNo, cb->sendBase);
-            int windowAvail = (int)cb->recvWindow - (int)inFlight;
-            if (windowAvail <= 0) break;
+        /* Retransmit oldest if it has timed out */
+        if (cb->unacked != NULL) {
+            long elapsed = now() - cb->oldestSendTime;
+            if (elapsed >= cb->retransmitTimeout) {
+                sendPacket(cb, &cb->unacked->packet);
+                cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
+                cb->oldestSendTime    = now();
+            }
+        }
 
+        unsigned int inFlight = minus32(cb->nextSeqNo, cb->sendBase);
+        int windowAvail = (int)cb->recvWindow - (int)inFlight;
+
+        if (windowAvail > 0) {
             int chunkLen = min(min(STCP_MSS, windowAvail), length - offset);
             int wasEmpty = (cb->unacked == NULL);
 
@@ -151,31 +172,26 @@ int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
                 cb->oldestSendTime    = now();
                 cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
             }
+        } else {
+            /* Window full — block until an ACK arrives or timeout fires */
+            long elapsed = now() - cb->oldestSendTime;
+            int timeLeft = max(1, cb->retransmitTimeout - (int)elapsed);
+
+            packet resp;
+            int n = recvPacket(cb, &resp, timeLeft);
+            if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
+            if (n == STCP_READ_TIMED_OUT) {
+                sendPacket(cb, &cb->unacked->packet);
+                cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
+                cb->oldestSendTime    = now();
+            } else {
+                if (getRst(resp.hdr)) return STCP_ERROR;
+                if (getAck(resp.hdr)) {
+                    cb->recvWindow = resp.hdr->windowSize;
+                    processAck(cb, resp.hdr->ackNo);
+                }
+            }
         }
-
-        if (cb->unacked == NULL) break;
-
-        /* Wait for ACK, respecting remaining time for oldest unacked */
-        long elapsed  = now() - cb->oldestSendTime;
-        int timeLeft  = max(0, cb->retransmitTimeout - (int)elapsed);
-
-        packet resp;
-        int n = recvPacket(cb, &resp, timeLeft);
-
-        if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
-
-        if (n == STCP_READ_TIMED_OUT) {
-            sendPacket(cb, &cb->unacked->packet);
-            cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
-            cb->oldestSendTime    = now();
-            continue;
-        }
-
-        if (getRst(resp.hdr)) return STCP_ERROR;
-        if (!getAck(resp.hdr)) continue;
-
-        cb->recvWindow = resp.hdr->windowSize;
-        processAck(cb, resp.hdr->ackNo);
     }
     return STCP_SUCCESS;
 }
@@ -248,26 +264,50 @@ stcp_send_ctrl_blk *stcp_open(char *destination, int sendersPort, int receiversP
 int stcp_close(stcp_send_ctrl_blk *cb) {
     cb->state = STCP_SENDER_CLOSING;
 
-    packet fin;
-    createSegment(&fin, FIN | ACK, 0, cb->nextSeqNo, cb->recvNextSeqNo, NULL, 0);
-    unsigned int finSeq = cb->nextSeqNo;
-    cb->nextSeqNo = plus32(cb->nextSeqNo, 1);
-    cb->state     = STCP_SENDER_FIN_WAIT;
-
-    int timeout = STCP_INITIAL_TIMEOUT;
-    while (1) {
-        sendPacket(cb, &fin);
+    /* Drain any unacked data before sending FIN */
+    while (cb->unacked != NULL) {
+        long elapsed = now() - cb->oldestSendTime;
+        int timeLeft = max(0, cb->retransmitTimeout - (int)elapsed);
 
         packet resp;
-        int n = recvPacket(cb, &resp, timeout);
-        if (n == STCP_READ_PERMANENT_FAILURE) break;
-        if (n == STCP_READ_TIMED_OUT)         { timeout = stcpNextTimeout(timeout); continue; }
-        if (getRst(resp.hdr))                 break;
-        if (!getAck(resp.hdr))                continue;
-        if (greater32(resp.hdr->ackNo, finSeq) ||
-            resp.hdr->ackNo == cb->nextSeqNo) break;
+        int n = recvPacket(cb, &resp, timeLeft);
+        if (n == STCP_READ_PERMANENT_FAILURE) goto cleanup;
+        if (n == STCP_READ_TIMED_OUT) {
+            sendPacket(cb, &cb->unacked->packet);
+            cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
+            cb->oldestSendTime    = now();
+        } else {
+            if (getRst(resp.hdr)) goto cleanup;
+            if (getAck(resp.hdr)) {
+                cb->recvWindow = resp.hdr->windowSize;
+                processAck(cb, resp.hdr->ackNo);
+            }
+        }
     }
 
+    {
+        packet fin;
+        createSegment(&fin, FIN | ACK, 0, cb->nextSeqNo, cb->recvNextSeqNo, NULL, 0);
+        unsigned int finSeq = cb->nextSeqNo;
+        cb->nextSeqNo = plus32(cb->nextSeqNo, 1);
+        cb->state     = STCP_SENDER_FIN_WAIT;
+
+        int timeout = STCP_INITIAL_TIMEOUT;
+        while (1) {
+            sendPacket(cb, &fin);
+
+            packet resp;
+            int n = recvPacket(cb, &resp, timeout);
+            if (n == STCP_READ_PERMANENT_FAILURE) break;
+            if (n == STCP_READ_TIMED_OUT)         { timeout = stcpNextTimeout(timeout); continue; }
+            if (getRst(resp.hdr))                 break;
+            if (!getAck(resp.hdr))                continue;
+            if (greater32(resp.hdr->ackNo, finSeq) ||
+                resp.hdr->ackNo == cb->nextSeqNo) break;
+        }
+    }
+
+cleanup:
     cb->state = STCP_SENDER_CLOSED;
     while (cb->unacked) {
         pktlist *next = cb->unacked->next;
@@ -322,11 +362,13 @@ int main(int argc, char **argv) {
         argc--;
     }
 
+    // Extract the arguments
     destinationHost = argc > 1 ? argv[1] : "localhost";
     receiversPort = argc > 2 ? atoi(argv[2]) : getDefaultPort();
     sendersPort = argc > 3 ? atoi(argv[3]) : getDefaultPort() + 1;
     if (argc > 4) filename = argv[4];
 
+    /* Open file for transfer */
     file = open(filename, O_RDONLY);
     if (file < 0) {
         logPerror(filename);
@@ -360,6 +402,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Close the connection to remote receiver */
     if (stcp_close(cb) == STCP_ERROR)
         fprintf(stderr, "stcp_close failed\n");
 
