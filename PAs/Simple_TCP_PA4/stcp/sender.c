@@ -18,6 +18,10 @@
 // Implemented by Dikpaal Patel 37647864 in May/June 2026
 
 
+
+
+
+
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -318,13 +322,11 @@ int main(int argc, char **argv) {
         argc--;
     }
 
-    // Extract the arguments
     destinationHost = argc > 1 ? argv[1] : "localhost";
     receiversPort = argc > 2 ? atoi(argv[2]) : getDefaultPort();
     sendersPort = argc > 3 ? atoi(argv[3]) : getDefaultPort() + 1;
     if (argc > 4) filename = argv[4];
 
-    /* Open file for transfer */
     file = open(filename, O_RDONLY);
     if (file < 0) {
         logPerror(filename);
@@ -358,7 +360,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Close the connection to remote receiver */
     if (stcp_close(cb) == STCP_ERROR)
         fprintf(stderr, "stcp_close failed\n");
 
