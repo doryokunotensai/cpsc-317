@@ -45,6 +45,8 @@ typedef struct {
     unsigned short recvWindow; /* receiver's latest advertised window */
 
     pktlist *unacked;          /* sent but not yet acked packets */
+    long oldestSendTime;       /* when oldest unacked packet was (last) sent */
+    int retransmitTimeout;     /* current timeout for oldest unacked */
 } stcp_send_ctrl_blk;
 
 
@@ -71,12 +73,37 @@ static int recvPacket(stcp_send_ctrl_blk *cb, packet *pkt, int timeoutMs) {
     if (n <= 0) return n;
     pkt->len = n;
     pkt->hdr = (tcpheader *)pkt->data;
+    /* checksum must be verified while header is still in network byte order */
     if (!checksumOk(pkt)) {
         logLog("error", "bad checksum, dropping");
         return STCP_READ_TIMED_OUT;
     }
     ntohHdr(pkt->hdr);
     return n;
+}
+
+/* Free all unacked entries whose last byte falls before ackNo, advance sendBase */
+static void processAck(stcp_send_ctrl_blk *cb, unsigned int ackNo) {
+    if (!greater32(ackNo, cb->sendBase) && ackNo != cb->sendBase) return;
+
+    int advanced = 0;
+    while (cb->unacked != NULL) {
+        pktlist *oldest = cb->unacked;
+        unsigned int endSeq = plus32(oldest->seqNo, (unsigned)payloadSize(&oldest->packet));
+        if (greater32(endSeq, ackNo)) break;   /* packet not fully acked yet */
+        cb->unacked = oldest->next;
+        oldest->next = NULL;
+        freePacket(oldest);
+        advanced = 1;
+    }
+
+    if (greater32(ackNo, cb->sendBase)) cb->sendBase = ackNo;
+
+    if (advanced && cb->unacked != NULL) {
+        /* new oldest — reset its timer */
+        cb->oldestSendTime    = now();
+        cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
+    }
 }
 
 /*
@@ -96,38 +123,55 @@ static int recvPacket(stcp_send_ctrl_blk *cb, packet *pkt, int timeoutMs) {
  */
 int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
     int offset = 0;
-    while (offset < length) {
-        int chunkLen = min(length - offset, (int)STCP_MSS);
 
-        packet pkt;
-        createSegment(&pkt, ACK, 0, cb->nextSeqNo, cb->recvNextSeqNo,
-                      data + offset, chunkLen);
-        unsigned int sentSeq = cb->nextSeqNo;
-        cb->nextSeqNo = plus32(cb->nextSeqNo, chunkLen);
+    while (offset < length || cb->unacked != NULL) {
 
-        int timeout = STCP_INITIAL_TIMEOUT;
-        sendPacket(cb, &pkt);
+        /* Fill window with new packets */
+        while (offset < length) {
+            unsigned int inFlight  = minus32(cb->nextSeqNo, cb->sendBase);
+            int windowAvail = (int)cb->recvWindow - (int)inFlight;
+            if (windowAvail <= 0) break;
 
-        while (1) {
-            packet resp;
-            int n = recvPacket(cb, &resp, timeout);
-            if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
-            if (n == STCP_READ_TIMED_OUT) {
-                sendPacket(cb, &pkt);
-                timeout = stcpNextTimeout(timeout);
-                continue;
-            }
-            if (getRst(resp.hdr)) return STCP_ERROR;
-            if (!getAck(resp.hdr)) continue;
+            int chunkLen = min(min(STCP_MSS, windowAvail), length - offset);
+            int wasEmpty = (cb->unacked == NULL);
 
-            if (greater32(resp.hdr->ackNo, sentSeq) ||
-                resp.hdr->ackNo == cb->nextSeqNo) {
-                cb->sendBase   = resp.hdr->ackNo;
-                cb->recvWindow = resp.hdr->windowSize;
-                break;
+            packet pkt;
+            createSegment(&pkt, ACK, 0, cb->nextSeqNo, cb->recvNextSeqNo,
+                          data + offset, chunkLen);
+            sendPacket(cb, &pkt);
+            addPacket(&cb->unacked, cb->nextSeqNo, &pkt);
+            cb->nextSeqNo = plus32(cb->nextSeqNo, (unsigned)chunkLen);
+            offset += chunkLen;
+
+            if (wasEmpty) {
+                cb->oldestSendTime    = now();
+                cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
             }
         }
-        offset += chunkLen;
+
+        if (cb->unacked == NULL) break;
+
+        /* Wait for ACK, respecting remaining time for oldest unacked */
+        long elapsed  = now() - cb->oldestSendTime;
+        int timeLeft  = max(0, cb->retransmitTimeout - (int)elapsed);
+
+        packet resp;
+        int n = recvPacket(cb, &resp, timeLeft);
+
+        if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
+
+        if (n == STCP_READ_TIMED_OUT) {
+            sendPacket(cb, &cb->unacked->packet);
+            cb->retransmitTimeout = stcpNextTimeout(cb->retransmitTimeout);
+            cb->oldestSendTime    = now();
+            continue;
+        }
+
+        if (getRst(resp.hdr)) return STCP_ERROR;
+        if (!getAck(resp.hdr)) continue;
+
+        cb->recvWindow = resp.hdr->windowSize;
+        processAck(cb, resp.hdr->ackNo);
     }
     return STCP_SUCCESS;
 }
@@ -274,6 +318,7 @@ int main(int argc, char **argv) {
         argc--;
     }
 
+    // Extract the arguments
     destinationHost = argc > 1 ? argv[1] : "localhost";
     receiversPort = argc > 2 ? atoi(argv[2]) : getDefaultPort();
     sendersPort = argc > 3 ? atoi(argv[3]) : getDefaultPort() + 1;
