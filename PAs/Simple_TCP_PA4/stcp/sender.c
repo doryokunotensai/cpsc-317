@@ -251,8 +251,8 @@ int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
                 cb->oldestSendTime    = now();
                 cb->retransmitTimeout = STCP_INITIAL_TIMEOUT;
             }
-        } else {
-            /* Window full — block until an ACK arrives or timeout fires */
+        } else if (cb->unacked != NULL) {
+            /* Window full with packets in flight — block until ACK or timeout */
             long elapsed = now() - cb->oldestSendTime;
             int timeLeft = max(1, cb->retransmitTimeout - (int)elapsed);
 
@@ -273,6 +273,16 @@ int stcp_send(stcp_send_ctrl_blk *cb, unsigned char *data, int length) {
                         if (fastRetransmit(cb) == STCP_ERROR) return STCP_ERROR;
                     }
                 }
+            }
+        } else {
+            /* Zero window with nothing in flight — wait for receiver window update */
+            packet resp;
+            int n = recvPacket(cb, &resp, STCP_INITIAL_TIMEOUT);
+            if (n == STCP_READ_PERMANENT_FAILURE) return STCP_ERROR;
+            if (n != STCP_READ_TIMED_OUT && getAck(resp.hdr)) {
+                if (getRst(resp.hdr)) return STCP_ERROR;
+                cb->recvWindow = resp.hdr->windowSize;
+                processAck(cb, resp.hdr->ackNo);
             }
         }
     }
