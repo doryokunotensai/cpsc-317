@@ -1,0 +1,5 @@
+pemican
+    n 1: lean dried meat pounded fine and mixed with melted fat;
+         used especially by North American Indians [syn: {pemmican},
+         {pemican}]
+.
