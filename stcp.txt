@@ -1,0 +1,82 @@
+• ## Resume title
+
+  Reliable Transport Sender over UDP (C, Simple TCP/STCP)
+
+  Not a TCP implementation. You implemented the sender side of a course STCP protocol; receiver/network harness were supplied.
+
+  ## What you built
+
+  A ~510-line C sender that transfers a file reliably over a connected UDP socket. It implements:
+
+  - Connection setup: sends SYN, validates SYN|ACK + expected ACK number, learns peer initial sequence number and advertised receive window.
+  - File segmentation: splits data into MTU-bounded STCP packets (STCP_MTU=300; payload is 300 - sizeof(tcpheader)).
+  - Sequence tracking: maintains next sequence number, oldest unacknowledged sequence number, peer ACK number, and receiver window.
+  - Sliding-window flow control: sends while inFlight < advertisedWindow; blocks for ACKs when full.
+  - ACK processing: handles cumulative ACKs; removes fully acknowledged packets from retransmission queue.
+  - Loss recovery: retains sent packets, retransmits oldest unacknowledged packet on timeout; timeout grows 1s → 2s → 4s maximum.
+  - Fast retransmit: detects 3 duplicate ACKs, retransmits oldest unacknowledged segment before waiting for the timer.
+  - Zero-window handling: waits for a receiver window update when no data is in flight.
+  - Corruption handling: computes Internet checksum before sends; verifies incoming checksum before host-byte-order conversion and drops bad
+    packets.
+
+  - 32-bit sequence-number wraparound: uses supplied modular comparison/add/subtract helpers consistently for window and ACK logic.
+  - Teardown: waits until queued data is ACKed, retransmits as needed, sends FIN|ACK, retries FIN with backoff until acknowledged, then frees
+    packet queue/socket/control block.
+
+  - Basic failure handling: recognizes RST and permanent UDP read failures in open/send paths.
+
+  Source: PAs/Simple_TCP_PA4/stcp/sender.c:38
+
+  ## Architecture
+
+  file -> MSS-sized chunks -> STCP sender -> connected UDP socket -> supplied receiver
+
+  sender state:
+  SYN_SENT -> ESTABLISHED -> CLOSING -> FIN_WAIT -> CLOSED
+
+  data path:
+  send packet -> retain copy in unacked queue -> receive cumulative ACK
+              -> advance sendBase/free acknowledged packets
+              -> timeout or 3 duplicate ACKs: retransmit oldest
+
+  The retransmission queue is a linked list of sent-but-unacknowledged packet copies. The implementation uses cumulative ACK semantics; it is not
+  selective acknowledgments, congestion control, RTT estimation, or production TCP.
+
+  ## What you can honestly claim
+
+  - “Built a reliable, flow-controlled file-transfer sender in C over UDP using a TCP-inspired STCP protocol.”
+  - “Implemented sliding-window transmission, cumulative ACK processing, timeout-based retransmission with capped exponential backoff, and three-
+    duplicate-ACK fast retransmit.”
+
+  - “Implemented sender-side connection setup/teardown, checksums, sequence-number wraparound-safe comparisons, advertised-window handling, and
+    zero-window recovery.”
+
+  - “Maintained an unacknowledged-segment queue to support loss recovery and safe resource cleanup.”
+
+  ## Strong resume bullets
+
+  - Implemented a reliable UDP-based transport sender in C, adding sliding-window flow control, cumulative ACK processing, and retransmission
+    buffering for ordered file delivery.
+
+  - Built loss recovery with 1–4s capped exponential-backoff timers and fast retransmit after 3 duplicate ACKs; handled peer resets and corrupted
+    inbound segments via Internet checksums.
+
+  - Added TCP-inspired session lifecycle and flow-control behavior: SYN/SYN-ACK validation, randomized initial sequence numbers, FIN
+    retransmission, receiver-advertised windows, zero-window waiting, and 32-bit sequence wraparound-safe arithmetic.
+
+  ## Do not claim
+
+  - “Implemented TCP” — inaccurate; it is STCP over UDP.
+  - “Built a full network stack” — inaccurate.
+  - “Implemented receiver/server” — receiver is supplied as platform binaries; no receiver source here.
+  - “Implemented congestion control,” “TCP Reno,” “SACK,” “RTT/RTO estimation,” “selective retransmission,” encryption, or security hardening —
+    absent.
+
+  - “Three-way handshake” — sender sends SYN and accepts SYN|ACK, but does not send a standalone final ACK.
+  - “Production-ready” — this is a course protocol implementation.
+
+  ## Verification evidence
+
+  make test passed: packet-list, header serialization, and sequence-wraparound tests. Fault-injection scripts also exist for dropped/delayed/
+  swapped/corrupted packets and delayed receiver consumption, but I did not run them because the scripts kill running sender/receiver processes
+  and overwrite OutputFile.
